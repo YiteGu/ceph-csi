@@ -27,6 +27,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -4641,6 +4642,130 @@ var _ = Describe("RBD", func() {
 				// validate created backend rbd images
 				validateRBDImageCount(f, 0, defaultRBDPool)
 				validateOmapCount(f, 0, rbdType, defaultRBDPool, volumesType)
+			})
+
+			By("validate rbd image qos", func() {
+				qosParameters := map[string]string{
+					"BaseReadIops":            "2000",
+					"BaseWriteIops":           "1000",
+					"BaseReadBytesPerSecond":  "209715200",
+					"BaseWriteBytesPerSecond": "104857600",
+				}
+				err := deleteResource(rbdExamplePath + "storageclass.yaml")
+				if err != nil {
+					framework.Failf("failed to delete storageclass: %v", err)
+				}
+
+				err = createRBDStorageClass(
+					f.ClientSet,
+					f,
+					defaultSCName,
+					nil,
+					qosParameters,
+					deletePolicy)
+				if err != nil {
+					framework.Failf("failed to create storageclass: %v", err)
+				}
+				defer func() {
+					err = deleteResource(rbdExamplePath + "storageclass.yaml")
+					if err != nil {
+						framework.Failf("failed to delete storageclass: %v", err)
+					}
+					err = createRBDStorageClass(f.ClientSet, f, defaultSCName, nil, nil, deletePolicy)
+					if err != nil {
+						framework.Failf("failed to create storageclass: %v", err)
+					}
+				}()
+
+				// create PVC
+				pvc, err := loadPVC(pvcPath)
+				if err != nil {
+					framework.Failf("failed to load PVC: %v", err)
+				}
+
+				pvc.Namespace = f.UniqueName
+				wants := map[string]string{
+					"rbd_qos_read_iops_limit":  "2000",
+					"rbd_qos_write_iops_limit": "1000",
+					"rbd_qos_read_bps_limit":   "209715200",
+					"rbd_qos_write_bps_limit":  "104857600",
+				}
+
+				err = createPVCAndvalidatePV(f.ClientSet, pvc, deployTimeout)
+				if err != nil {
+					framework.Failf("failed to create PVC and application: %v", err)
+				}
+
+				// validate rbd image qos
+				err = validateQOS(f, pvc, wants)
+				if err != nil {
+					framework.Failf("failed to validate qos: %v", err)
+				}
+
+				// delete pvc
+				err = deletePVCAndValidatePV(f.ClientSet, pvc, deployTimeout)
+				if err != nil {
+					framework.Failf("failed to delete PVC: %v", err)
+				}
+
+				qosParameters = map[string]string{
+					"BaseReadIops":            "2000",
+					"BaseWriteIops":           "1000",
+					"BaseReadBytesPerSecond":  "209715200",
+					"BaseWriteBytesPerSecond": "104857600",
+					"ReadIopsPerGB":           "20",
+					"WriteIopsPerGB":          "10",
+					"ReadBpsPerGB":            "2097152",
+					"WriteBpsPerGB":           "1048576",
+					"BaseVolSizeBytes":        "21474836480",
+				}
+				err = deleteResource(rbdExamplePath + "storageclass.yaml")
+				if err != nil {
+					framework.Failf("failed to delete storageclass: %v", err)
+				}
+
+				err = createRBDStorageClass(
+					f.ClientSet,
+					f,
+					defaultSCName,
+					nil,
+					qosParameters,
+					deletePolicy)
+				if err != nil {
+					framework.Failf("failed to create storageclass: %v", err)
+				}
+
+				// create PVC
+				pvc, err = loadPVC(pvcPath)
+				if err != nil {
+					framework.Failf("failed to load PVC: %v", err)
+				}
+
+				pvc.Namespace = f.UniqueName
+				pvc.Spec.Resources.Requests[v1.ResourceStorage] = resource.MustParse("100Gi")
+				wants = map[string]string{
+					"rbd_qos_read_iops_limit":  "3600",
+					"rbd_qos_write_iops_limit": "1800",
+					"rbd_qos_read_bps_limit":   "377487360",
+					"rbd_qos_write_bps_limit":  "188743680",
+				}
+
+				err = createPVCAndvalidatePV(f.ClientSet, pvc, deployTimeout)
+				if err != nil {
+					framework.Failf("failed to create PVC and application: %v", err)
+				}
+
+				// validate rbd image qos
+				err = validateQOS(f, pvc, wants)
+				if err != nil {
+					framework.Failf("failed to validate qos: %v", err)
+				}
+
+				// delete pvc
+				err = deletePVCAndValidatePV(f.ClientSet, pvc, deployTimeout)
+				if err != nil {
+					framework.Failf("failed to delete PVC: %v", err)
+				}
 			})
 
 			By("create a PVC and check PVC/PV metadata on RBD image after setmetadata is set to false", func() {
